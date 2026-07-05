@@ -4574,6 +4574,113 @@ extern ULONG STDMETHODCALLTYPE d3d12_dxvk_interop_device_AddRef(d3d12_dxvk_inter
 extern ULONG STDMETHODCALLTYPE d3d12_low_latency_device_AddRef(ID3DLowLatencyDevice *iface);
 extern ULONG STDMETHODCALLTYPE d3d12_amd_ext_anti_lag_AddRef(IAmdExtAntiLagApi *iface);
 
+/* --- BEGIN MSFS startup-video diagnostics (fork-local; safe to delete) ----------
+ *
+ * Symptom: under this DXVK + vkd3d-proton setup MSFS 2020/2024 plays startup and
+ * cutscene video AUDIO but shows no picture. The same stack works on Linux/Proton,
+ * so the delta is the Windows Media Foundation video path, not the D3D12 renderer.
+ *
+ * This logs, with NO environment variables (MSFS 2024 is a Store/Xbox app and does
+ * not reliably inherit them), every unsupported QueryInterface on the D3D12 device
+ * plus every OpenSharedHandle, so we can see whether vkd3d is even in the video
+ * path or whether it fails entirely on the D3D11 / Media Foundation (DXVK) side.
+ * Output is appended to  %TEMP%\vkd3d-msfs-video.log  (writable from the sandbox).
+ * Enabled automatically when the host process looks like MSFS. Delete this block
+ * and its two call sites to revert.
+ */
+#ifdef _WIN32
+static bool vkd3d_msfs_str_contains_ci(const char *haystack, const char *needle_lc)
+{
+    size_t i, j;
+
+    for (i = 0; haystack[i]; i++)
+    {
+        for (j = 0; needle_lc[j]; j++)
+        {
+            char c = haystack[i + j];
+            if (!c || (char)(c | 0x20) != needle_lc[j])
+                break;
+        }
+        if (!needle_lc[j])
+            return true;
+    }
+    return false;
+}
+
+static bool vkd3d_msfs_is_target(void)
+{
+    static int is_target = -1;
+
+    if (is_target < 0)
+    {
+        char app[VKD3D_PATH_MAX];
+        /* Matches FlightSimulator.exe (2020) and FlightSimulator2024.exe (2024). */
+        is_target = (vkd3d_get_program_name(app)
+                && vkd3d_msfs_str_contains_ci(app, "flightsimulator")) ? 1 : 0;
+    }
+    return is_target != 0;
+}
+
+static void vkd3d_msfs_video_logf(const char *fmt, ...) VKD3D_PRINTF_FUNC(1, 2);
+static void vkd3d_msfs_video_logf(const char *fmt, ...)
+{
+    static FILE *file;
+    static volatile LONG opened;
+    va_list args;
+
+    if (!vkd3d_msfs_is_target())
+        return;
+
+    /* Open the log file exactly once, on the first diagnostic from any thread. */
+    if (InterlockedCompareExchange(&opened, 1, 0) == 0)
+    {
+        char path[MAX_PATH];
+        DWORD n = GetTempPathA((DWORD)(sizeof(path) - sizeof("vkd3d-msfs-video.log")), path);
+        if (n > 0 && n < sizeof(path) - sizeof("vkd3d-msfs-video.log"))
+        {
+            memcpy(path + n, "vkd3d-msfs-video.log", sizeof("vkd3d-msfs-video.log"));
+            if ((file = fopen(path, "a")))
+                fprintf(file, "=== vkd3d-proton MSFS video diagnostics ===\n");
+        }
+    }
+
+    if (!file)
+        return;
+
+    va_start(args, fmt);
+    vfprintf(file, fmt, args);
+    va_end(args);
+    fflush(file);
+}
+#else
+static bool vkd3d_msfs_is_target(void) { return false; }
+static void vkd3d_msfs_video_logf(const char *fmt, ...) { (void)fmt; }
+#endif
+
+/* Best-effort names for the well-known D3D12 video interface IIDs (d3d12video.h).
+ * Wrong/missing entries are harmless: the caller still logs the raw GUID. */
+static const char *vkd3d_msfs_video_iid_name(REFIID riid)
+{
+    static const struct { GUID iid; const char *name; } video_iids[] =
+    {
+        { { 0x1f052a5f, 0xa6ad, 0x4d80, { 0x9d, 0xf9, 0xb7, 0xc8, 0x9d, 0x5e, 0x4a, 0x85 } }, "ID3D12VideoDevice" },
+        { { 0x981611ad, 0xa144, 0x4c83, { 0x98, 0x90, 0xf3, 0x0e, 0x26, 0xd6, 0x58, 0xab } }, "ID3D12VideoDevice1" },
+        { { 0xf019ac49, 0xf838, 0x4a95, { 0x9b, 0x17, 0x57, 0x94, 0x37, 0xc8, 0xf5, 0x13 } }, "ID3D12VideoDevice2" },
+        { { 0x4243adb4, 0x3a32, 0x4666, { 0x97, 0x3c, 0x0c, 0xcc, 0x56, 0x25, 0xdc, 0x44 } }, "ID3D12VideoDevice3" },
+        { { 0xc59b6bdc, 0x7720, 0x4074, { 0xa1, 0x36, 0x17, 0x25, 0xa9, 0xd5, 0xd6, 0xb5 } }, "ID3D12VideoDecoder" },
+        { { 0x79a2e5fb, 0xccd2, 0x469a, { 0x9f, 0xde, 0x19, 0x5d, 0x10, 0x95, 0x1f, 0x7e } }, "ID3D12VideoDecoder1" },
+        { { 0x3b60536e, 0xad29, 0x4e64, { 0xa2, 0x69, 0xf8, 0x53, 0x83, 0x7e, 0x5e, 0x53 } }, "ID3D12VideoDecodeCommandList" },
+        { { 0x304fdb32, 0xbede, 0x410a, { 0x85, 0x45, 0x94, 0x3a, 0xc6, 0xa4, 0x61, 0x38 } }, "ID3D12VideoProcessor" },
+    };
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(video_iids); i++)
+        if (IsEqualGUID(riid, &video_iids[i].iid))
+            return video_iids[i].name;
+    return NULL;
+}
+/* --- END MSFS startup-video diagnostics ------------------------------------------ */
+
 HRESULT STDMETHODCALLTYPE d3d12_device_QueryInterface(d3d12_device_iface *iface,
         REFIID riid, void **object)
 {
@@ -4665,6 +4772,14 @@ HRESULT STDMETHODCALLTYPE d3d12_device_QueryInterface(d3d12_device_iface *iface,
         ID3D12DeviceConfiguration1_AddRef(&device->ID3D12DeviceConfiguration1_iface);
         *object = &device->ID3D12DeviceConfiguration1_iface;
         return S_OK;
+    }
+
+    /* MSFS video diagnostics (fork-local; safe to delete). */
+    if (vkd3d_msfs_is_target())
+    {
+        const char *name = vkd3d_msfs_video_iid_name(riid);
+        vkd3d_msfs_video_logf("QueryInterface: unsupported %s (%s) -> E_NOINTERFACE\n",
+                debugstr_guid(riid), name ? name : "non-video");
     }
 
     WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(riid));
@@ -7697,6 +7812,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(d3d12_device_ifac
 
     TRACE("iface %p, handle %p, riid %s, object %p\n",
             iface, handle, debugstr_guid(riid), object);
+
+    /* MSFS video diagnostics (fork-local; safe to delete). */
+    if (vkd3d_msfs_is_target())
+        vkd3d_msfs_video_logf("OpenSharedHandle: handle %p, riid %s\n", handle, debugstr_guid(riid));
 
     if (IsEqualGUID(riid, &IID_ID3D12Resource))
     {
