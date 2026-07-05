@@ -7844,6 +7844,11 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(d3d12_device_ifac
             return return_interface(&resource->ID3D12Resource_iface, &IID_ID3D12Resource, riid, object);
         }
 
+        /* MSFS video diag: D3DKMT descriptor path failed; falling back to the
+         * (Wine-only) \\.\SharedGpuResource metadata side-channel. */
+        if (vkd3d_msfs_is_target())
+            vkd3d_msfs_video_logf("  open_resource_descriptor failed hr %#x; trying shared-metadata fallback\n", (int)hr);
+
         if (handle_is_kmt_style(handle))
         {
             handle = vkd3d_open_kmt_handle(handle);
@@ -7851,6 +7856,9 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(d3d12_device_ifac
 
             if (handle == INVALID_HANDLE_VALUE)
             {
+                /* MSFS video diag */
+                if (vkd3d_msfs_is_target())
+                    vkd3d_msfs_video_logf("  vkd3d_open_kmt_handle FAILED (no \\\\.\\SharedGpuResource device) -> E_INVALIDARG\n");
                 WARN("Failed to open KMT-style ID3D12Resource shared handle.\n");
                 *object = NULL;
                 return E_INVALIDARG;
@@ -7859,6 +7867,9 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(d3d12_device_ifac
 
         if (!vkd3d_get_shared_metadata(handle, &metadata, sizeof(metadata), NULL))
         {
+            /* MSFS video diag */
+            if (vkd3d_msfs_is_target())
+                vkd3d_msfs_video_logf("  vkd3d_get_shared_metadata FAILED (no \\\\.\\SharedGpuResource device) -> E_INVALIDARG\n");
             WARN("Failed to get ID3D12Resource shared handle metadata.\n");
             if (kmt_handle)
                 CloseHandle(handle);
@@ -7911,10 +7922,18 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(d3d12_device_ifac
 
         if (FAILED(hr))
         {
+            /* MSFS video diag */
+            if (vkd3d_msfs_is_target())
+                vkd3d_msfs_video_logf("  d3d12_resource_create_committed FAILED hr %#x\n", (int)hr);
             WARN("Failed to open shared ID3D12Resource, hr %#x.\n", (int)hr);
             *object = NULL;
             return hr;
         }
+
+        /* MSFS video diag */
+        if (vkd3d_msfs_is_target())
+            vkd3d_msfs_video_logf("  OpenSharedHandle(ID3D12Resource) SUCCEEDED (%ux%u fmt %u)\n",
+                    (unsigned)desc.Width, (unsigned)desc.Height, (unsigned)desc.Format);
 
         return return_interface(&resource->ID3D12Resource_iface, &IID_ID3D12Resource, riid, object);
     }

@@ -13,7 +13,39 @@
 So the whole D3D stack is Vulkan-backed on Windows, exactly like Linux. "Missing d3d11"
 is **not** the problem.
 
-## Root cause reasoning
+## ROOT CAUSE (confirmed by the diagnostic log)
+The diagnostic shows MSFS calling `OpenSharedHandle(handle, IID_ID3D12Resource)`
+repeatedly at startup — i.e. it imports DXVK's decoded video frames as D3D12 textures.
+So vkd3d **is** in the video path.
+
+The import fails because the DXVK -> vkd3d shared-texture path transports the D3D11
+texture metadata (size/format/bind flags) through a **Wine-only pseudo-device**:
+
+`libs/vkd3d/shared_metadata.c`:
+- `vkd3d_get_shared_metadata()` -> `DeviceIoControl(handle, IOCTL_SHARED_GPU_RESOURCE_GET_METADATA, ...)`
+- `vkd3d_open_kmt_handle()`     -> `CreateFileA("\\\\.\\SharedGpuResource", ...)`
+
+`\\.\SharedGpuResource` and those `IOCTL_SHARED_GPU_RESOURCE_*` codes are provided by
+**Wine/Proton**, not native Windows. The native fallback
+`d3d12_device_open_resource_descriptor()` (D3DKMT) also fails, because DXVK's shared
+textures are exported Vulkan memory, not D3DKMT runtime resources with DXGI private data.
+
+Result on native Windows: every video-frame `OpenSharedHandle` returns `E_INVALIDARG`,
+the picture never imports -> **audio only**. On Linux/Proton Wine provides the device, so
+it works. This is a **native-Windows gap in the DXVK<->vkd3d shared-resource interop**,
+not a D3D12-video-decode issue.
+
+### Fix scope (honest)
+The metadata must travel via a transport that exists on native Windows. Because
+DXVK-d3d11 and vkd3d-d3d12 run **in the same process** (MSFS), a process/named shared
+transport works. But it requires patching **both** sides:
+- vkd3d-proton `shared_metadata.c` (the reader), and
+- DXVK's equivalent shared-metadata writer (upstream doitsujin/dxvk — would need a fork).
+
+There is no vkd3d-only fix: vkd3d cannot recover D3D11 texture metadata that DXVK never
+stored anywhere native Windows can read. Do **not** fake a D3D12 video decoder.
+
+## Root cause reasoning (original, superseded by the section above)
 vkd3d-proton is identical code on Linux and Windows, so the Linux-works / Windows-fails
 delta is **not** in this repo. The only component that differs is **Media Foundation**:
 
