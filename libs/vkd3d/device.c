@@ -7851,17 +7851,21 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(d3d12_device_ifac
 
         if (handle_is_kmt_style(handle))
         {
-            handle = vkd3d_open_kmt_handle(handle);
-            kmt_handle = true;
+            HANDLE nt_handle = vkd3d_open_kmt_handle(handle);
 
-            if (handle == INVALID_HANDLE_VALUE)
+            if (nt_handle != INVALID_HANDLE_VALUE)
             {
-                /* MSFS video diag */
+                handle = nt_handle;
+                kmt_handle = true;
+            }
+            else
+            {
+                /* Native Windows has no \\.\SharedGpuResource to convert the
+                 * KMT handle to NT. Keep the raw handle: the memory import
+                 * below handles it via OPAQUE_WIN32_KMT, and the native
+                 * metadata fallback is keyed by this same handle value. */
                 if (vkd3d_msfs_is_target())
-                    vkd3d_msfs_video_logf("  vkd3d_open_kmt_handle FAILED (no \\\\.\\SharedGpuResource device) -> E_INVALIDARG\n");
-                WARN("Failed to open KMT-style ID3D12Resource shared handle.\n");
-                *object = NULL;
-                return E_INVALIDARG;
+                    vkd3d_msfs_video_logf("  vkd3d_open_kmt_handle unavailable; using raw KMT handle %p\n", handle);
             }
         }
 
