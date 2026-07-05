@@ -48,6 +48,6 @@ jobs:
         with:
           name: vkd3d-proton ${{ steps.version.outputs.version }} (msfs)
           files: build/vkd3d-proton-${{ steps.version.outputs.version }}.tar.zst
-          draft: true
+          draft: false
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
