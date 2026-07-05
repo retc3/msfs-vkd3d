@@ -1,0 +1,13 @@
+msfs native windows video fix
+
+dxvk decodes video into a d3d11 texture and shares it to vkd3d d3d12
+the texture metadata crossed only via the wine sharedgpuresource ioctl device
+native windows has no such device so the import failed and video was audio only
+
+fix
+native fallback reads the metadata from a temp file keyed by the raw shared handle value
+file name is tempdir then vkd3d-dxvk-shared then handle in hex then bin
+struct dxvksharedtexturemetadata must stay identical in dxvk and vkd3d
+both repos must use the same file name and the same struct or it breaks
+also do not bail in opensharedhandle when the kmt to nt conversion is unavailable
+keep the raw handle which imports via opaque win32 kmt
