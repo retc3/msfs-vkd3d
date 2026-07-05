@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags (e.g. v3.0.1)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (without leading v, e.g. 3.0.1)'
+        required: true
+
+jobs:
+  build-release:
+    name: Build and draft release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Strip the leading 'v' from the tag so the archive matches the
+            # msfs-vulkan launcher's runtime.lock.json (vkd3d-proton-<ver>.tar.zst).
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release package
+        uses: misyltoad/arch-mingw-github-action@v8
+        with:
+          command: |
+            ./package-release.sh "${VERSION}" build
+
+      - name: Create draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: vkd3d-proton ${{ steps.version.outputs.version }} (msfs)
+          files: build/vkd3d-proton-${{ steps.version.outputs.version }}.tar.zst
+          draft: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
