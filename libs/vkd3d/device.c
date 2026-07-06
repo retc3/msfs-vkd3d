@@ -4607,7 +4607,7 @@ static bool vkd3d_msfs_str_contains_ci(const char *haystack, const char *needle_
     return false;
 }
 
-static bool vkd3d_msfs_is_target(void)
+bool vkd3d_msfs_is_target(void)
 {
     static int is_target = -1;
 
@@ -4621,8 +4621,7 @@ static bool vkd3d_msfs_is_target(void)
     return is_target != 0;
 }
 
-static void vkd3d_msfs_video_logf(const char *fmt, ...) VKD3D_PRINTF_FUNC(1, 2);
-static void vkd3d_msfs_video_logf(const char *fmt, ...)
+void vkd3d_msfs_video_logf(const char *fmt, ...)
 {
     static FILE *file;
     static volatile LONG opened;
@@ -4653,11 +4652,12 @@ static void vkd3d_msfs_video_logf(const char *fmt, ...)
     fflush(file);
 }
 #else
-static bool vkd3d_msfs_is_target(void) { return false; }
-static void vkd3d_msfs_video_logf(const char *fmt, ...) { (void)fmt; }
+bool vkd3d_msfs_is_target(void) { return false; }
+void vkd3d_msfs_video_logf(const char *fmt, ...) { (void)fmt; }
 #endif
 
-/* Best-effort names for the well-known D3D12 video interface IIDs (d3d12video.h).
+/* Best-effort names for IIDs seen in MSFS logs: D3D12 video (d3d12video.h) plus
+ * the D3D11/D3D10/DXGI interfaces something keeps probing vkd3d objects for.
  * Wrong/missing entries are harmless: the caller still logs the raw GUID. */
 static const char *vkd3d_msfs_video_iid_name(REFIID riid)
 {
@@ -4671,6 +4671,9 @@ static const char *vkd3d_msfs_video_iid_name(REFIID riid)
         { { 0x79a2e5fb, 0xccd2, 0x469a, { 0x9f, 0xde, 0x19, 0x5d, 0x10, 0x95, 0x1f, 0x7e } }, "ID3D12VideoDecoder1" },
         { { 0x3b60536e, 0xad29, 0x4e64, { 0xa2, 0x69, 0xf8, 0x53, 0x83, 0x7e, 0x5e, 0x53 } }, "ID3D12VideoDecodeCommandList" },
         { { 0x304fdb32, 0xbede, 0x410a, { 0x85, 0x45, 0x94, 0x3a, 0xc6, 0xa4, 0x61, 0x38 } }, "ID3D12VideoProcessor" },
+        { { 0xdb6f6ddb, 0xac77, 0x4e88, { 0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40 } }, "ID3D11Device" },
+        { { 0x9b7e4c0f, 0x342c, 0x4106, { 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0 } }, "ID3D10Device" },
+        { { 0xaec22fb8, 0x76f3, 0x4639, { 0x9b, 0xe0, 0x28, 0xeb, 0x43, 0xa6, 0x7a, 0x2e } }, "IDXGIObject" },
     };
     unsigned int i;
 
@@ -4678,6 +4681,35 @@ static const char *vkd3d_msfs_video_iid_name(REFIID riid)
         if (IsEqualGUID(riid, &video_iids[i].iid))
             return video_iids[i].name;
     return NULL;
+}
+
+/* Log an unsupported QueryInterface together with the module that made the
+ * call, so we can tell game code, Media Foundation, UI middleware, and
+ * overlays apart. `caller` is VKD3D_MSFS_CALLER() from the QI entry point. */
+void vkd3d_msfs_log_unsupported_qi(const char *kind, REFIID riid, void *caller)
+{
+    const char *name = vkd3d_msfs_video_iid_name(riid);
+#ifdef _WIN32
+    const char *module_name = "unknown-module";
+    char module_path[MAX_PATH];
+    HMODULE module;
+
+    if (!vkd3d_msfs_is_target())
+        return;
+
+    if (caller && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)caller, &module)
+            && GetModuleFileNameA(module, module_path, sizeof(module_path)))
+    {
+        const char *sep = strrchr(module_path, '\\');
+        module_name = sep ? sep + 1 : module_path;
+    }
+
+    vkd3d_msfs_video_logf("QueryInterface(%s): unsupported %s (%s) from %s -> E_NOINTERFACE\n",
+            kind, debugstr_guid(riid), name ? name : "?", module_name);
+#else
+    (void)kind; (void)name; (void)caller;
+#endif
 }
 /* --- END MSFS startup-video diagnostics ------------------------------------------ */
 
@@ -4775,12 +4807,7 @@ HRESULT STDMETHODCALLTYPE d3d12_device_QueryInterface(d3d12_device_iface *iface,
     }
 
     /* MSFS video diagnostics (fork-local; safe to delete). */
-    if (vkd3d_msfs_is_target())
-    {
-        const char *name = vkd3d_msfs_video_iid_name(riid);
-        vkd3d_msfs_video_logf("QueryInterface: unsupported %s (%s) -> E_NOINTERFACE\n",
-                debugstr_guid(riid), name ? name : "non-video");
-    }
+    vkd3d_msfs_log_unsupported_qi("device", riid, VKD3D_MSFS_CALLER());
 
     WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(riid));
 

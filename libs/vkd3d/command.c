@@ -22248,6 +22248,9 @@ HRESULT STDMETHODCALLTYPE d3d12_command_queue_QueryInterface(ID3D12CommandQueue 
         return S_OK;
     }
 
+    /* MSFS video diagnostics (fork-local; safe to delete). */
+    vkd3d_msfs_log_unsupported_qi("command_queue", riid, VKD3D_MSFS_CALLER());
+
     WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(riid));
 
     *object = NULL;

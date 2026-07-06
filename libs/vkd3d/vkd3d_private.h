@@ -7081,6 +7081,24 @@ bool vkd3d_set_shared_metadata(HANDLE handle, void *buf, uint32_t buf_size);
 bool vkd3d_get_shared_metadata(HANDLE handle, void *buf, uint32_t buf_size, uint32_t *metadata_size);
 HANDLE vkd3d_open_kmt_handle(HANDLE kmt_handle);
 
+/* MSFS diagnostics (fork-local; implemented in device.c, safe to delete).
+ * VKD3D_MSFS_CALLER() must be evaluated inside the QI entry point itself so
+ * the return address identifies the module that called QueryInterface. */
+bool vkd3d_msfs_is_target(void);
+void vkd3d_msfs_video_logf(const char *fmt, ...) VKD3D_PRINTF_FUNC(1, 2);
+void vkd3d_msfs_log_unsupported_qi(const char *kind, REFIID riid, void *caller);
+#ifdef _WIN32
+# ifdef _MSC_VER
+#  include <intrin.h>
+#  pragma intrinsic(_ReturnAddress)
+#  define VKD3D_MSFS_CALLER() _ReturnAddress()
+# else
+#  define VKD3D_MSFS_CALLER() __builtin_return_address(0)
+# endif
+#else
+# define VKD3D_MSFS_CALLER() ((void *)0)
+#endif
+
 #define VKD3D_VENDOR_ID_NVIDIA 0x10DE
 #define VKD3D_VENDOR_ID_AMD 0x1002
 #define VKD3D_VENDOR_ID_INTEL 0x8086

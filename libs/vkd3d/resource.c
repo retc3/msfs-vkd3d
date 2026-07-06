@@ -2219,6 +2219,9 @@ static HRESULT STDMETHODCALLTYPE d3d12_resource_QueryInterface(d3d12_resource_if
         return S_OK;
     }
 
+    /* MSFS video diagnostics (fork-local; safe to delete). */
+    vkd3d_msfs_log_unsupported_qi("resource", riid, VKD3D_MSFS_CALLER());
+
     WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(riid));
 
     *object = NULL;
