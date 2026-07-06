@@ -11,3 +11,11 @@ struct dxvksharedtexturemetadata must stay identical in dxvk and vkd3d
 both repos must use the same file name and the same struct or it breaks
 also do not bail in opensharedhandle when the kmt to nt conversion is unavailable
 keep the raw handle which imports via opaque win32 kmt
+
+env free debug logging
+msfs blocks env vars so we cannot set vkd3d debug or vkd3d log file
+the launcher writes msfs-vulkan-debug.conf next to the game exe
+it contains one line log_dir= then an absolute path
+when present vkd3d forces full trace logging into log_dir then vkd3d.log
+dxvk reads the same conf and writes log_dir then dxvk.log
+launcher makes the dir as logs then unixtime
