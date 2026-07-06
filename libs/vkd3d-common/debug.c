@@ -78,10 +78,69 @@ struct vkd3d_string_stream
 };
 static struct vkd3d_string_stream vkd3d_dbg_buffer;
 
+/* MSFS tailored: env-var-free debug trigger. MSFS is a Store/launcher app and
+ * does not let us pass VKD3D_DEBUG / VKD3D_LOG_FILE. Instead the msfs-vulkan
+ * launcher drops a file next to the game exe:
+ *
+ *   msfs-vulkan-debug.conf   with a line   log_dir=<absolute path>
+ *
+ * When present we force full (trace) logging into <log_dir>/vkd3d.log. The dir
+ * is created by the launcher (logs/<unixtime>/). Safe to delete this block. */
+#ifdef _WIN32
+static bool vkd3d_msfs_debug_log_path(char *out, size_t out_size)
+{
+    char exe_path[VKD3D_PATH_MAX];
+    char conf_path[VKD3D_PATH_MAX];
+    char line[VKD3D_PATH_MAX];
+    char *sep;
+    FILE *conf;
+    bool found = false;
+
+    if (!GetModuleFileNameA(NULL, exe_path, sizeof(exe_path)))
+        return false;
+
+    if (!(sep = strrchr(exe_path, '\\')))
+        return false;
+    *sep = '\0';
+
+    snprintf(conf_path, sizeof(conf_path), "%s\\msfs-vulkan-debug.conf", exe_path);
+    if (!(conf = fopen(conf_path, "r")))
+        return false;
+
+    while (fgets(line, sizeof(line), conf))
+    {
+        char *nl;
+        if (strncmp(line, "log_dir=", 8) != 0)
+            continue;
+        if ((nl = strpbrk(line + 8, "\r\n")))
+            *nl = '\0';
+        if (line[8])
+        {
+            snprintf(out, out_size, "%s\\vkd3d.log", line + 8);
+            found = true;
+        }
+        break;
+    }
+
+    fclose(conf);
+    return found;
+}
+#else
+static bool vkd3d_msfs_debug_log_path(char *out, size_t out_size)
+{
+    (void)out; (void)out_size;
+    return false;
+}
+#endif
+
 static void vkd3d_dbg_init_once(void)
 {
     char vkd3d_debug[VKD3D_PATH_MAX];
+    char msfs_log_path[VKD3D_PATH_MAX];
+    bool msfs_debug;
     unsigned int channel, i;
+
+    msfs_debug = vkd3d_msfs_debug_log_path(msfs_log_path, sizeof(msfs_log_path));
 
     for (channel = 0; channel < VKD3D_DBG_CHANNEL_COUNT; channel++)
     {
@@ -95,6 +154,11 @@ static void vkd3d_dbg_init_once(void)
         /* Default debug level. */
         if (vkd3d_dbg_level[channel] == VKD3D_DBG_LEVEL_UNKNOWN)
             vkd3d_dbg_level[channel] = VKD3D_DBG_LEVEL_FIXME;
+
+        /* MSFS tailored debug trigger forces full logging on every channel,
+         * unless an env var already set a higher-priority explicit level. */
+        if (msfs_debug && vkd3d_dbg_level[channel] < VKD3D_DBG_LEVEL_TRACE)
+            vkd3d_dbg_level[channel] = VKD3D_DBG_LEVEL_TRACE;
     }
 
     if (vkd3d_get_env_var("VKD3D_LOG_BUFFERED", vkd3d_debug, sizeof(vkd3d_debug)))
@@ -107,7 +171,11 @@ static void vkd3d_dbg_init_once(void)
         vkd3d_dbg_buffer.buffer = malloc(vkd3d_dbg_buffer.size);
     }
 
-    if (!vkd3d_disable_file && vkd3d_get_env_var("VKD3D_LOG_FILE", vkd3d_debug, sizeof(vkd3d_debug)))
+    /* MSFS tailored: prefer the explicit env log file, else the debug-conf path. */
+    if (!vkd3d_disable_file && !vkd3d_get_env_var("VKD3D_LOG_FILE", vkd3d_debug, sizeof(vkd3d_debug)) && msfs_debug)
+        strncpy(vkd3d_debug, msfs_log_path, sizeof(vkd3d_debug) - 1);
+
+    if (!vkd3d_disable_file && vkd3d_debug[0])
     {
         /* Avoid extra formatting overhead when using buffered. */
         vkd3d_log_file = fopen(vkd3d_debug, vkd3d_dbg_buffer.buffer ? "wb" : "w");
