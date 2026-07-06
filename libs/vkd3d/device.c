@@ -4621,23 +4621,83 @@ bool vkd3d_msfs_is_target(void)
     return is_target != 0;
 }
 
+/* When the msfs-vulkan launcher's debug trigger (msfs-vulkan-debug.conf next
+ * to the game exe) is active, place the diagnostics next to vkd3d.log where
+ * the user already collects logs; %TEMP% is only the fallback. */
+static bool vkd3d_msfs_debug_conf_dir(char *out, size_t out_size)
+{
+    char exe_path[VKD3D_PATH_MAX];
+    char conf_path[VKD3D_PATH_MAX];
+    char line[VKD3D_PATH_MAX];
+    bool found = false;
+    FILE *conf;
+    char *sep;
+
+    if (!GetModuleFileNameA(NULL, exe_path, sizeof(exe_path)))
+        return false;
+    if (!(sep = strrchr(exe_path, '\\')))
+        return false;
+    *sep = '\0';
+
+    snprintf(conf_path, sizeof(conf_path), "%s\\msfs-vulkan-debug.conf", exe_path);
+    if (!(conf = fopen(conf_path, "r")))
+        return false;
+
+    while (fgets(line, sizeof(line), conf))
+    {
+        char *nl;
+        if (strncmp(line, "log_dir=", 8) != 0)
+            continue;
+        if ((nl = strpbrk(line + 8, "\r\n")))
+            *nl = '\0';
+        if (line[8])
+        {
+            snprintf(out, out_size, "%s", line + 8);
+            found = true;
+        }
+        break;
+    }
+
+    fclose(conf);
+    return found;
+}
+
 void vkd3d_msfs_video_logf(const char *fmt, ...)
 {
     static FILE *file;
     static volatile LONG opened;
+    char message[512];
     va_list args;
 
     if (!vkd3d_msfs_is_target())
         return;
 
-    /* Open the log file exactly once, on the first diagnostic from any thread. */
+    va_start(args, fmt);
+    vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+
+    /* Mirror into the standard vkd3d log so the diagnostics show up next to
+     * the WARNs even if the standalone file cannot be created. */
+    INFO("[msfs-video] %s", message);
+
+    /* Open the standalone file exactly once, on the first diagnostic. */
     if (InterlockedCompareExchange(&opened, 1, 0) == 0)
     {
-        char path[MAX_PATH];
-        DWORD n = GetTempPathA((DWORD)(sizeof(path) - sizeof("vkd3d-msfs-video.log")), path);
-        if (n > 0 && n < sizeof(path) - sizeof("vkd3d-msfs-video.log"))
+        char path[VKD3D_PATH_MAX];
+        char dir[VKD3D_PATH_MAX];
+        bool have_dir = vkd3d_msfs_debug_conf_dir(dir, sizeof(dir));
+
+        if (!have_dir)
         {
-            memcpy(path + n, "vkd3d-msfs-video.log", sizeof("vkd3d-msfs-video.log"));
+            DWORD n = GetTempPathA(sizeof(dir), dir);
+            have_dir = n > 0 && n < sizeof(dir);
+        }
+
+        if (have_dir)
+        {
+            size_t len = strlen(dir);
+            const char *slash = (len && (dir[len - 1] == '\\' || dir[len - 1] == '/')) ? "" : "\\";
+            snprintf(path, sizeof(path), "%s%svkd3d-msfs-video.log", dir, slash);
             if ((file = fopen(path, "a")))
                 fprintf(file, "=== vkd3d-proton MSFS video diagnostics ===\n");
         }
@@ -4646,9 +4706,7 @@ void vkd3d_msfs_video_logf(const char *fmt, ...)
     if (!file)
         return;
 
-    va_start(args, fmt);
-    vfprintf(file, fmt, args);
-    va_end(args);
+    fputs(message, file);
     fflush(file);
 }
 #else
