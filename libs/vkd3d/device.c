@@ -24,6 +24,7 @@
 #include "vkd3d_timestamp_profiler.h"
 #include "vkd3d_platform.h"
 #include "vkd3d_d3dkmt.h"
+#include "vkd3d_native_interop.h"
 
 #ifdef VKD3D_ENABLE_RENDERDOC
 #include "vkd3d_renderdoc.h"
@@ -5033,6 +5034,10 @@ static void d3d12_device_destroy(struct d3d12_device *device)
     rwlock_destroy(&device->vertex_input_lock);
     pthread_mutex_destroy(&device->mutex);
     d3d12_device_close_kmt(device);
+#ifdef _WIN32
+    /* msfs fork: tear down the real-runtime interop helper. */
+    vkd3d_native_interop_destroy(device->native_interop);
+#endif
     if (device->parent)
         IUnknown_Release(device->parent);
     vkd3d_instance_decref(device->vkd3d_instance);
@@ -7773,6 +7778,22 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateSharedHandle(d3d12_device_if
         {
             ID3D12Resource_Release(resource_iface);
             return DXGI_ERROR_INVALID_CALL;
+        }
+
+        /* msfs fork: resources allocated through the real D3D11 runtime carry
+         * a genuine runtime NT handle any process can open; hand out a dup. */
+        if (resource->native_share_handle)
+        {
+            if (DuplicateHandle(GetCurrentProcess(), resource->native_share_handle,
+                    GetCurrentProcess(), handle, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            {
+                if (vkd3d_msfs_is_target())
+                    vkd3d_msfs_video_logf("CreateSharedHandle: native runtime handle for %ux%u\n",
+                            (unsigned int)resource->desc.Width, resource->desc.Height);
+                ID3D12Resource_Release(resource_iface);
+                return S_OK;
+            }
+            WARN("Failed to duplicate native share handle.\n");
         }
 
         if (D3DKMTShareObjects(1, &resource->kmt_local, &attr, access, handle) == STATUS_SUCCESS)

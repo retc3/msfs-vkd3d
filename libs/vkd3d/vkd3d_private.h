@@ -1171,6 +1171,14 @@ struct d3d12_resource
     struct vkd3d_memory_allocation private_mem;
     struct vkd3d_unique_resource res;
     D3DKMT_HANDLE kmt_local;
+#ifdef _WIN32
+    /* msfs fork: when a shared resource is backed by a real-runtime D3D11
+     * texture, the genuine NT share handle + keep-alive texture object, and
+     * the external memory handle type used for the VkImage and its import. */
+    HANDLE native_share_handle;
+    void *native_share_texture;
+    VkExternalMemoryHandleTypeFlagBits external_handle_type;
+#endif
 
     struct d3d12_heap *heap;
 
@@ -5772,6 +5780,11 @@ struct d3d12_device
     IUnknown *parent;
     LUID adapter_luid;
     D3DKMT_HANDLE kmt_local;
+#ifdef _WIN32
+    /* msfs fork: lazily created real-runtime D3D11 helper for allocating
+     * shared textures other processes can actually open (native_interop.c). */
+    void *native_interop;
+#endif
 
     struct vkd3d_private_store private_store;
     struct d3d_destruction_notifier destruction_notifier;

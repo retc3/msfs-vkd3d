@@ -19,3 +19,13 @@ it contains one line log_dir= then an absolute path
 when present vkd3d forces full trace logging into log_dir then vkd3d.log
 dxvk reads the same conf and writes log_dir then dxvk.log
 launcher makes the dir as logs then unixtime
+
+native shared resources for external apps
+fenix a320 external app opens sim created shared textures with the real runtime
+stock vkd3d exports vulkan opaque handles real d3d cannot open them
+fix native_interop.c allocates shared textures through the real system32 d3d11
+runtime and imports the memory into vulkan as d3d11 texture type
+createsharedhandle then hands out the genuine runtime nt handle
+foreign runtime handles are detected via d3dkmt query and imported the same way
+dxvk side needs the symmetric fix for opening runtime handles still todo
+shared fences still unsupported phase two

@@ -24,6 +24,7 @@
 
 #include "vkd3d_private.h"
 #include "vkd3d_d3dkmt.h"
+#include "vkd3d_native_interop.h"
 #include "vkd3d_rw_spinlock.h"
 #include "vkd3d_descriptor_debug.h"
 #include "hashmap.h"
@@ -747,6 +748,11 @@ static HRESULT vkd3d_get_image_create_info(struct d3d12_device *device,
     {
         external_info->sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
         external_info->handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#ifdef _WIN32
+        /* msfs fork: real-runtime shared textures use D3D11_TEXTURE memory. */
+        if (resource->external_handle_type)
+            external_info->handleTypes = resource->external_handle_type;
+#endif
         vk_prepend_struct(image_info, external_info);
     }
 
@@ -3985,6 +3991,17 @@ static void d3d12_resource_destroy(struct d3d12_resource *resource, struct d3d12
 
     d3d12_resource_close_export_kmt(resource, device);
 
+#ifdef _WIN32
+    /* msfs fork: drop the real-runtime backing of native shared resources.
+     * The Vulkan memory import above holds its own reference at the KMT
+     * level, but only until vkd3d_free_memory below runs, so release the
+     * texture last-ish but before the memory goes away is fine either way. */
+    if (resource->native_share_handle)
+        CloseHandle(resource->native_share_handle);
+    if (resource->native_share_texture)
+        vkd3d_native_interop_release_object(resource->native_share_texture);
+#endif
+
     if ((resource->flags & VKD3D_RESOURCE_ALLOCATION) && resource->mem.device_allocation.vk_memory)
         vkd3d_free_memory(device, &device->memory_allocator, &resource->mem);
 
@@ -4328,6 +4345,51 @@ HRESULT d3d12_resource_create_committed(struct d3d12_device *device, const D3D12
 
 #ifdef _WIN32
         VkImportMemoryWin32HandleInfoKHR import_info;
+
+        if (heap_flags & D3D12_HEAP_FLAG_SHARED)
+        {
+            if (shared_handle && shared_handle != INVALID_HANDLE_VALUE)
+            {
+                /* msfs fork: a handle created by the real D3D runtime (in this
+                 * or another process) must be imported as a D3D11 texture, not
+                 * as a Vulkan-opaque handle. */
+                if (!((UINT_PTR)shared_handle & 0xc0000000)
+                        && d3d12_device_shared_handle_is_runtime(device, shared_handle))
+                    object->external_handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+            }
+            else if (desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D)
+            {
+                /* msfs fork: allocate the share through the real D3D11 runtime
+                 * so external processes (Fenix displays and friends) can open
+                 * the handle. Falls back to the legacy Vulkan-opaque export. */
+                void *nt_handle, *texture;
+                uint32_t bind_flags = 0;
+
+                if (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+                    bind_flags |= D3D11_BIND_RENDER_TARGET;
+                if (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+                    bind_flags |= D3D11_BIND_DEPTH_STENCIL;
+                if (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+                    bind_flags |= D3D11_BIND_UNORDERED_ACCESS;
+                if (!(desc->Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE))
+                    bind_flags |= D3D11_BIND_SHADER_RESOURCE;
+
+                if (vkd3d_native_interop_create_shared_texture(&device->native_interop,
+                        &device->adapter_luid, (uint32_t)desc->Width, desc->Height,
+                        desc->MipLevels, desc->DepthOrArraySize, desc->Format,
+                        desc->SampleDesc.Count, desc->SampleDesc.Quality, bind_flags,
+                        &nt_handle, &texture))
+                {
+                    object->native_share_handle = nt_handle;
+                    object->native_share_texture = texture;
+                    object->external_handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+                    INFO("Allocated shared resource through the native D3D11 runtime (%ux%u, format #%x).\n",
+                            (unsigned int)desc->Width, desc->Height, desc->Format);
+                }
+                else
+                    WARN("Native shared texture allocation failed, falling back to opaque export.\n");
+            }
+        }
 #endif
 
         if (FAILED(hr = d3d12_resource_create_vk_resource(object, num_castable_formats, castable_formats, device)))
@@ -4392,10 +4454,24 @@ HRESULT d3d12_resource_create_committed(struct d3d12_device *device, const D3D12
             {
                 import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
                 import_info.pNext = allocate_info.pNext;
-                import_info.handleType = ((UINT_PTR)shared_handle & 0xc0000000)
+                /* msfs fork: real-runtime handles import as D3D11 textures. */
+                import_info.handleType = object->external_handle_type
+                        ? object->external_handle_type
+                        : (((UINT_PTR)shared_handle & 0xc0000000)
                         ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT
-                        : VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+                        : VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT);
                 import_info.handle = shared_handle;
+                import_info.name = NULL;
+                allocate_info.pNext = &import_info;
+            }
+            else if (object->native_share_handle)
+            {
+                /* msfs fork: bind the memory of the real-runtime D3D11 texture
+                 * allocated in the block above. */
+                import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
+                import_info.pNext = allocate_info.pNext;
+                import_info.handleType = object->external_handle_type;
+                import_info.handle = object->native_share_handle;
                 import_info.name = NULL;
                 allocate_info.pNext = &import_info;
             }
