@@ -365,6 +365,8 @@ EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTQueryResourceInfoFromNtHandle(D3DKMT_Q
 EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTShareObjects(UINT count, const D3DKMT_HANDLE *handles, OBJECT_ATTRIBUTES *attr, UINT access, HANDLE *handle);
 
 extern HRESULT d3d12_device_open_resource_descriptor(struct d3d12_device *device, HANDLE handle, D3D12_RESOURCE_DESC1 *desc);
+/* msfs fork: true if the NT handle refers to a real-runtime shared resource. */
+extern bool d3d12_device_shared_handle_is_runtime(struct d3d12_device *device, HANDLE handle);
 
 #endif  /* _WIN32 */
 

@@ -207,6 +207,25 @@ void d3d12_resource_close_export_kmt(struct d3d12_resource *resource, struct d3d
     }
 }
 
+/* msfs fork: cheap probe distinguishing real-runtime shared handles (created
+ * by native D3D, queryable through D3DKMT) from Vulkan-opaque handles that
+ * DXVK/vkd3d export themselves. Decides the memory import handle type. */
+bool d3d12_device_shared_handle_is_runtime(struct d3d12_device *device, HANDLE handle)
+{
+    D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE query = {0};
+    union d3dkmt_desc d3dkmt = {0};
+
+    if (!device->kmt_local)
+        return false;
+
+    query.hDevice = device->kmt_local;
+    query.hNtHandle = handle;
+    query.pPrivateRuntimeData = &d3dkmt;
+    query.PrivateRuntimeDataSize = sizeof(d3dkmt);
+
+    return D3DKMTQueryResourceInfoFromNtHandle(&query) == STATUS_SUCCESS;
+}
+
 HRESULT d3d12_device_open_resource_descriptor(struct d3d12_device *device, HANDLE handle, D3D12_RESOURCE_DESC1 *desc)
 {
     D3DKMT_DESTROYALLOCATION destroy = {0};

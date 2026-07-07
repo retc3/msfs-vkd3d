@@ -109,7 +109,7 @@ if enable_descriptor_qa or enable_breadcrumbs
 endif
 
 if vkd3d_platform == 'windows'
-  vkd3d_src += ['shared_metadata.c']
+  vkd3d_src += ['shared_metadata.c', 'native_interop.c']
 endif
 
 if enable_profiling
